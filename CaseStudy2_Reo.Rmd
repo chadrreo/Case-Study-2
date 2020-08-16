@@ -1,0 +1,776 @@
+---
+title: "Case Study 2"
+author: "Chad Reo"
+date: "8/15/2020"
+output: html_document
+---
+
+
+
+## R Markdown
+
+This Case Study is a deep dive into Talent Management information for DDS Analytics. The objectives of this project are to
+1. Identify overall attrition trends
+2. Name top three factors that contribute to turnover
+3. Create a model to predict Attrition
+4. Create a model to predict Income
+
+A video of this presentation can be found here:  https://youtu.be/AbNwj4uWUTY
+ 
+
+```
+# Import necessary libraries
+
+```
+
+## Load Libraries
+
+```{r, echo=FALSE}
+library(tidyverse)
+library(caret)
+library(class)
+library(dplyr)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+library(Hmisc)
+library(jsonlite)
+library(kableExtra)
+library(knitr)
+library(maps)
+library(naniar)
+library(stringr)
+library(tidyr)
+library(ISLR)
+library(GGally)
+library(MASS)
+library(car)
+library(glmnet)
+library(epitools)
+library(ROCR)
+```
+Load files and review formats
+```{r, echo=FALSE}
+AttritionData <- read.csv('CaseStudy2-data.csv')
+head(AttritionData)
+
+# Always important to look at the basic structure first
+str(AttritionData) # Attrition and associated Facts/Dimensions: 2 factor columns, 3 num columns, and 4 int columns
+AttritionData$ID = as.character(AttritionData$ID) #change ID to Char from Factor
+str(AttritionData)
+
+summary(AttritionData) # I see no NAs but some Factors need casting and some number ranges that need normalizing
+AttritionData$ID = as.character(AttritionData$ID) #change ID to Char from Factor
+AttritionData$LogMonthlyIncome = log10(AttritionData$MonthlyIncome) #Normalize
+  
+summary(AttritionData)
+
+#on ppt
+gg_miss_var(AttritionData)
+```
+
+create transformed data for Attrtion analysis
+```{r, echo=FALSE}
+
+Attrition_Subset <- sqldf(" Select id, Attrition,
+                          
+                          case when Attrition = 'No' then 0
+                              else 1 end 
+                                as 'AttritionCnt', 
+                                
+                          case when BusinessTravel = 'Travel_Rarely' then 2
+                              when BusinessTravel = 'Non-Travel' then 1 
+                              else 3 end 
+                                as 'BusinessTravelLvl',
+                                
+                          case when Department = 'Research & Development' then 1
+                              when Department = 'Human Resources' then 2 
+                              else 3 end 
+                                as 'DeptTurnoverLvl',
+                                
+                          case when DistanceFromHome > 15 then 2
+                              else 1 end 
+                                as 'DistanceLevel',      
+                          
+                          case when EducationField in ('Life Sciences','Medical') then 1
+                              when EducationField in ('Marketing','Other') then 2 
+                              else 3 end 
+                                as 'EducAttrLvl',
+                          
+                          case when JobInvolvement = 4 then 1
+                              when JobInvolvement in (2,3) then 2
+                              else 3 end 
+                                as 'JobInvolvementLvl',      
+                          
+                          case when JobLevel = 4 then 1
+                              when JobLevel in (2,3,5) then 2
+                              else 3 end 
+                                as 'JobLevelGrp',      
+                          
+                          case when JobRole like '%Director%' then 1
+                              when JobRole in ('Healthcare Representative','Manager') then 2
+                              when JobRole = 'Sales Representative' then 4
+                              else 3 end 
+                                as 'JobRoleLvl',
+                          
+                           case when JobSatisfaction = 4 then 1
+                              when JobSatisfaction = 1 then 3
+                              else 2 end 
+                                as 'JobSatisfactionLvl',
+                          
+                          case when MaritalStatus = 'Divorced' then 1
+                              when MaritalStatus = 'Married' then 2
+                              else 3 end 
+                                as 'MaritalStatusLvl',
+                                
+                          case when MonthlyIncome >10000 then 1
+                              else 2 end 
+                                as 'IncomeGroup',
+                                
+                          case when NumCompaniesWorked in (0,2,3,4) then 1
+                              when NumCompaniesWorked in (1,8) then 2
+                              else 3 end 
+                                as 'NumCompaniesWorkedLvl',      
+                          
+                           case when OverTime = 'No' then 1
+                              else 2 end 
+                                as 'OverTimeFactor',
+                           
+                           case when PercentSalaryHike in (21,25) then 1
+                              when PercentSalaryHike in (12,14,15,18,19,20) then 2
+                              when PercentSalaryHike in (11,13,16,17,22) then 3
+                              else 4 end 
+                                as 'PercentSalaryHikeLvl', 
+                           
+                           case when StockOptionLevel in (2,1) then 1
+                              else 2 end 
+                                as 'StockOptionGrp',
+                                
+                            case when TotalWorkingYears >25 then 1
+                              when TotalWorkingYears in (9,13,10,19,24,12,15,22,21,17,20) then 2
+                              when TotalWorkingYears in (11,14,26,16,23,18,8,25,31) then 3
+                              when TotalWorkingYears in (6,5,7,4,3) then 4
+                              else 5 end 
+                                as 'WorkYrsGroupLvl',
+                            
+                            case when TrainingTimesLastYear in (0,1,2) then 2
+                              else 1 end 
+                                as 'TrainingTimesGrp',  
+                                
+                            case when WorkLifeBalance = 1 then 2
+                              else 1 end 
+                                as 'WorkLifeBalanceGrp',     
+                                
+                            case when YearsAtCompany <= 5 then 2
+                              else 1 end 
+                                as YearsAtCompanyLvl,
+                            
+                            case when YearsSinceLastPromotion between 6 and 10 then 2
+                              else 1 end 
+                                as YearsSinceLastPromotionLvl,
+                                
+                                Education,
+                                TotalWorkingYears,
+                                YearsAtCompany,
+                                YearsInCurrentRole,
+                                YearsSinceLastPromotion,
+                                YearsWithCurrManager,
+                                Department,
+                                YearsSinceLastPromotion/TotalWorkingYears as CurrPrcntOfOverall,
+                                YearsSinceLastPromotion/YearsInCurrentRole as NewRolePrcnt,
+                                YearsSinceLastPromotion/TotalWorkingYears as PercntWaiting,
+                                LogMonthlyIncome,
+                                Gender,
+                                Age,
+                                DistanceFromHome
+                                
+                          from AttritionData
+                        ")
+Attrition_Subset
+summary(Attrition_Subset)
+```
+
+
+Data Exploration
+
+
+```{r, echo=FALSE}
+
+                        
+#Overall                     
+Attrition_Subset_qry1 <- sqldf("select count(ID) as EmplCnt,
+                            Sum(AttritionCnt) as AttritionCnt
+                        From Attrition_Subset")
+Attrition_Subset_qry1$AttritionPrcnt = as.numeric(Attrition_Subset_qry1$AttritionCnt/Attrition_Subset_qry1$EmplCnt)
+Attrition_Subset_qry1 
+
+#graph overall
+barplot(Attrition_Subset_qry1$AttritionPrcnt,
+        main="Overall Attrition %",
+        ylab="Percent",
+        border="red",
+        col="blue",
+        density=10)   
+
+
+
+
+#By Department                                                
+Attrition_Subset_qry2 <- sqldf("select Department, 
+                            count(ID) as EmplCnt,
+                            Sum(AttritionCnt) as AttritionCnt
+                        From Attrition_Subset 
+                        Group by Department
+                        Order by Department")
+Attrition_Subset_qry2$AttritionPrcnt = as.numeric(Attrition_Subset_qry2$AttritionCnt/Attrition_Subset_qry2$EmplCnt)
+Attrition_Subset_qry2  
+
+barplot(Attrition_Subset_qry2$AttritionPrcnt,
+        main="Attrition by Department",
+        names.arg=c("Human Resources","Research & Devl","Sales"), 
+        ylab="Percent",
+        border="red",
+        col="blue",
+        density=10) 
+
+
+#By Department by Gender
+Attrition_Subset_qry3 <- sqldf("select Department, 
+                            count(ID) as EmplCnt,
+                            Sum(AttritionCnt) as AttritionCnt,
+                            Gender
+                        From Attrition_Subset 
+                        Group by Department, Gender
+                        Order by Gender, Department")
+Attrition_Subset_qry3$AttritionPrcnt = as.numeric(Attrition_Subset_qry3$AttritionCnt/Attrition_Subset_qry3$EmplCnt)
+Attrition_Subset_qry3 
+
+
+#Attrition by Department by Gender
+barplot(Attrition_Subset_qry3$AttritionPrcnt,
+        main="Attrition by Department",
+        names.arg=c("HR-F","R&D-F","Sales-F",
+                    "HR-M","R&D-M","Sales-M"), 
+        las = 1,
+        horiz=T,
+        beside=TRUE,
+        xlab="Percent",
+        border="red",
+        col="blue",
+        density=10) 
+
+
+
+
+Attrition_Subset_qry3 %>% #filter(Attrition_Subset_qry$Gender == "Female") %>%
+  ggplot(aes(x = factor(Department), y = AttritionPrcnt, color = Gender)) +
+  geom_bar(stat="identity", position="stack") +
+  ggtitle("Attrition by Dept by Gender") +
+  xlab("Department") + ylab("Attrition %")
+
+
+
+Attrition_Subset_qry <- sqldf("select Department, gender,
+                            count(ID) as EmplCnt,
+                            Sum(AttritionCnt) as AttritionCnt,
+                            DistanceLevel,
+                            JobInvolvementLvl,
+                            WorkLifeBalanceGrp
+                        From Attrition_Subset 
+                        Group by Department, gender")
+Attrition_Subset_qry$AttritionPrcnt = as.numeric(Attrition_Subset_qry$AttritionCnt/Attrition_Subset_qry$EmplCnt)
+Attrition_Subset_qry 
+
+install.packages("viridis")
+library(viridis)
+
+Attrition_Subset_qry %>% ggplot(aes( x=Department, y=AttritionPrcnt)) + 
+  geom_bar(stat="identity", color="white", fill="blue") +
+  scale_fill_viridis(discrete = T) +
+  ggtitle("Studying 4 species..") +
+  #theme_ipsum() +
+  xlab("")
+
+```
+
+
+Look at individual factors  
+```{r, echo=FALSE}
+                        
+                      
+Attrition_Subset_qry %>% ggplot(aes(x = Department, 
+      y = AttritionPrcnt)) +  #, color = Gender
+      geom_point(aes(shape = Gender), size = 3) +
+      ggtitle("Attrition by Department by Distance From Home") + 
+      xlab("Department") + ylab("Distance From Home")                         
+                        
+
+Attrition_Subset %>% ggplot(aes(YearsAtCompany,LogMonthlyIncome))+geom_point(color = )+
+  geom_smooth(method='lm',formula=Attrition_Subset$YearsAtCompany~Attrition_Subset$LogMonthlyIncome)                        
+                        
+                        
+                        
+#Look at individual factors  
+gridExtra::grid.arrange(
+Attrition_Subset %>% ggplot(aes(x = factor(Department), 
+    y = DistanceFromHome, color = Attrition)) +
+   geom_jitter(aes(shape = Gender), size = 3) +
+   ggtitle("Attrition by Department by Distance From Home") + 
+   xlab("Department") + ylab("Distance From Home") ,
+                        
+Attrition_Subset %>% ggplot(aes(x = factor(Department), 
+                y = BusinessTravelLvl, color = Attrition)) +
+    geom_jitter(aes(shape = factor(Gender)), size = 3) +
+    ggtitle("Attrition by Department by Travel Level") + 
+    xlab("Department") + ylab("Travel Level")  ,
+nrow = 1
+)
+
+gridExtra::grid.arrange(
+Attrition_Subset %>% 
+  ggplot(aes(x = factor(Department), 
+             y = Education, color = Attrition)) +
+  geom_jitter(aes(shape = factor(Gender)), size = 3) +
+  ggtitle("Attrition by Department by Education") + 
+  xlab("Department") + ylab("Education")  ,
+
+#compare
+Attrition_Subset %>% 
+  ggplot(aes(x = YearsWithCurrManager, 
+             y = Age, color = Attrition)) +
+  geom_jitter(aes(shape = Gender), size = 3) +
+  ggtitle("Attrition by Job Role and Job Level") + 
+  xlab("Job Role Level") + ylab("Job Level Group") ,
+nrow  = 1
+)
+
+
+
+#Look at individual factors                        
+Attrition_Subset %>% ggplot(aes(x = factor(Attrition_Subset$BusinessTravelLvl), y = YearsInCurrentRole, color = Attrition)) + geom_jitter()
+
+#Combine factors                           
+Attrition_Subset %>% ggplot(aes(x = DeptTurnoverLvl, y = EducAttrLvl, color = Attrition)) + geom_jitter()
+                        
+Attrition_Subset %>% ggplot(aes(x = OverTimeFactor, y = Department, color = Attrition)) + geom_jitter()
+                         
+Attrition_Subset %>% ggplot(aes(x = JobLevelGrp, y = MaritalStatusLvl, color = Attrition)) + geom_jitter()
+
+#for SalesReps LogYearsAtCompany * LogMonthlyIncome 
+Attrition_Subset %>% ggplot(aes(x = NumCompaniesWorkedLvl, y = WorkLifeBalanceGrp, color = Attrition)) + geom_jitter()
+
+```
+
+
+```{r, echo=FALSE}
+#create data set for knn                       
+Attrition_Subset_for_test <- sqldf("select BusinessTravelLvl*
+  DeptTurnoverLvl*
+  DistanceLevel*
+  EducAttrLvl*
+  JobInvolvementLvl*
+  JobLevelGrp*
+  JobRoleLvl*
+  JobSatisfactionLvl*
+  MaritalStatusLvl*
+    IncomeGroup as measure1,
+ 
+  NumCompaniesWorkedLvl*
+  OverTimeFactor*
+  NumCompaniesWorkedLvl*
+  PercentSalaryHikeLvl*
+  StockOptionGrp*
+  WorkYrsGroupLvl*
+  TrainingTimesGrp*
+  WorkLifeBalanceGrp*
+  YearsAtCompanyLvl*
+  YearsSinceLastPromotionLvl as measure2,
+
+  Attrition
+  from Attrition_Subset")
+
+
+
+
+
+##create normalization function
+nor <-function(x) { (x -min(x))/(max(x)-min(x))   }
+
+##Run nomalization on first 2 coulumns of dataset because they are the predictors
+Attrition_Subset_for_test_norm <- as.data.frame(lapply(Attrition_Subset_for_test[,c(1,2)], nor))
+
+summary(Attrition_Subset_for_test_norm)
+str(Attrition_Subset_for_test_norm)
+
+#train and test datasets
+trainIndices = sample(1:dim(Attrition_Subset_for_test)[1],round(splitPerc * dim(Attrition_Subset_for_test)[1]))
+train = Attrition_Subset_for_test_norm[trainIndices,]
+test = Attrition_Subset_for_test_norm[-trainIndices,]
+
+##extract 3th column of train dataset because it will be used as 'cl' argument in knn function.
+Attrition_target_category <- Attrition_Subset_for_test[trainIndices,3]
+##extract 3th column of test dataset to measure the accuracy
+Attrition_test_category <- Attrition_Subset_for_test[-trainIndices,3]
+
+#set table to record measures
+accs = data.frame(accuracy = numeric(30),
+                  k = numeric(30),
+                  sensitivity = numeric(30),
+                  specificity = numeric(30))
+
+for(i in 1:30)
+{
+  classifications = knn(train[,c(1,2)],test[,c(1,2)],Attrition_target_category, prob = TRUE, k = i)
+  table(Attrition_test_category,classifications)
+  CM = confusionMatrix(table(Attrition_test_category,classifications))
+  accs$accuracy[i] = CM$overall[1]
+  accs$sensitivity[i] = CM$byClass[1]
+  accs$specificity[i] = CM$byClass[2]
+  accs$k[i] = i
+}
+
+plot(accs$k,accs$accuracy, type = "l", xlab = "k")
+plot(accs$k,accs$sensitivity, type = "l", xlab = "k")
+plot(accs$k,accs$specificity, type = "l", xlab = "k")
+
+
+
+# Loop for many k and the average of many training / test partition
+#```{r}
+iterations = 500
+numks = 30
+
+masterAcc = matrix(nrow = iterations, ncol = numks)
+masterSensitivity = matrix(nrow = iterations, ncol = numks)
+masterSpecificity = matrix(nrow = iterations, ncol = numks)
+
+
+for(j in 1:iterations)
+{
+
+  trainIndices = sample(1:dim(Attrition_Subset_for_test)[1],round(splitPerc * dim(Attrition_Subset_for_test)[1]))
+  train = Attrition_Subset_for_test_norm[trainIndices,]
+  test = Attrition_Subset_for_test_norm[-trainIndices,]
+  train_var = Attrition_Subset_for_test[trainIndices,3]
+  test_var = Attrition_Subset_for_test[-trainIndices,3]
+  
+  for(i in 1:numks)
+  {
+    classifications = knn(train[,c(1,2)],test[,c(1,2)],train_var, prob = TRUE, k = i)
+    table(test_var,classifications)
+    CM = confusionMatrix(table(test_var,classifications))
+    #masterAcc[j,i] = CM$byClass[2]
+    masterAcc[j,i] = CM$overall[1]
+    masterSensitivity[j,i] = CM$byClass[1]
+    masterSpecificity[j,i] = CM$byClass[2]
+    #accs$k[j,i] = j,i
+  }
+  
+}
+
+MeanAcc = colMeans(masterAcc)
+MeanSensitivity= colMeans(masterSensitivity)
+MeanSpecificity = colMeans(masterSpecificity)
+
+#Show plots of the Accuracy, Sensitivity, and Specificity
+
+plot(seq(1,numks,1),MeanAcc, col="blue", type = "l", main = "KNN Accuracy")
+plot(seq(1,numks,1),MeanSensitivity, col="orange", type = "l", main = "KNN Sensitivity")
+plot(seq(1,numks,1),MeanSpecificity, col="green", type = "l",  main = "KNN Specificity")
+
+```
+
+
+import predict data
+
+```{r, echo=FALSE}
+
+
+
+AttritionData_Predict <- read.csv('CaseStudy2CompSet No Attrition.csv')
+
+summary(AttritionData_Predict)
+str(AttritionData_Predict)
+
+Attrition_Subset_Predict <- sqldf(" Select id,
+                          case when BusinessTravel = 'Travel_Rarely' then 2
+                              when BusinessTravel = 'Non-Travel' then 1 
+                              else 3 end 
+                                as 'BusinessTravelLvl',
+                                
+                          case when Department = 'Research & Development' then 1
+                              when Department = 'Human Resources' then 2 
+                              else 3 end 
+                                as 'DeptTurnoverLvl',
+                                
+                          case when DistanceFromHome > 15 then 2
+                              else 1 end 
+                                as 'DistanceLevel',      
+                          
+                          case when EducationField in ('Life Sciences','Medical') then 1
+                              when EducationField in ('Marketing','Other') then 2 
+                              else 3 end 
+                                as 'EducAttrLvl',
+                          
+                          case when JobInvolvement = 4 then 1
+                              when JobInvolvement in (2,3) then 2
+                              else 3 end 
+                                as 'JobInvolvementLvl',      
+                          
+                          case when JobLevel = 4 then 1
+                              when JobLevel in (2,3,5) then 2
+                              else 3 end 
+                                as 'JobLevelGrp',      
+                          
+                          case when JobRole like '%Director%' then 1
+                              when JobRole in ('Healthcare Representative','Manager') then 2
+                              when JobRole = 'Sales Representative' then 4
+                              else 3 end 
+                                as 'JobRoleLvl',
+                          
+                           case when JobSatisfaction = 4 then 1
+                              when JobSatisfaction = 1 then 3
+                              else 2 end 
+                                as 'JobSatisfactionLvl',
+                          
+                          case when MaritalStatus = 'Divorced' then 1
+                              when MaritalStatus = 'Married' then 2
+                              else 3 end 
+                                as 'MaritalStatusLvl',
+                                
+                          case when MonthlyIncome >10000 then 1
+                              else 2 end 
+                                as 'IncomeGroup',
+                                
+                          case when NumCompaniesWorked in (0,2,3,4) then 1
+                              when NumCompaniesWorked in (1,8) then 2
+                              else 3 end 
+                                as 'NumCompaniesWorkedLvl',      
+                          
+                           case when OverTime = 'No' then 1
+                              else 2 end 
+                                as 'OverTimeFactor',
+                           
+                           case when PercentSalaryHike in (21,25) then 1
+                              when PercentSalaryHike in (12,14,15,18,19,20) then 2
+                              when PercentSalaryHike in (11,13,16,17,22) then 3
+                              else 4 end 
+                                as 'PercentSalaryHikeLvl', 
+                           
+                           case when StockOptionLevel in (2,1) then 1
+                              else 2 end 
+                                as 'StockOptionGrp',
+                                
+                            case when TotalWorkingYears >25 then 1
+                              when TotalWorkingYears in (9,13,10,19,24,12,15,22,21,17,20) then 2
+                              when TotalWorkingYears in (11,14,26,16,23,18,8,25,31) then 3
+                              when TotalWorkingYears in (6,5,7,4,3) then 4
+                              else 5 end 
+                                as 'WorkYrsGroupLvl',
+                            
+                            case when TrainingTimesLastYear in (0,1,2) then 2
+                              else 1 end 
+                                as 'TrainingTimesGrp',  
+                                
+                            case when WorkLifeBalance = 1 then 2
+                              else 1 end 
+                                as 'WorkLifeBalanceGrp',     
+                                
+                            case when YearsAtCompany <= 5 then 2
+                              else 1 end 
+                                as YearsAtCompanyLvl,
+                            
+                            case when YearsSinceLastPromotion between 6 and 10 then 2
+                              else 1 end 
+                                as YearsSinceLastPromotionLvl     
+                                
+                          from AttritionData_Predict
+                        ")
+Attrition_Subset_Predict
+str(Attrition_Subset_Predict)
+
+
+Attrition_Subset_for_Predict <- sqldf("select BusinessTravelLvl,
+  DeptTurnoverLvl,
+  DistanceLevel,
+  EducAttrLvl,
+  JobInvolvementLvl,
+  JobLevelGrp,
+  JobRoleLvl,
+  JobSatisfactionLvl,
+  MaritalStatusLvl,
+   NumCompaniesWorkedLvl,
+  OverTimeFactor,
+  NumCompaniesWorkedLvl,
+  PercentSalaryHikeLvl,
+  StockOptionGrp,
+  WorkYrsGroupLvl,
+  TrainingTimesGrp,
+  WorkLifeBalanceGrp,
+  YearsAtCompanyLvl,
+  YearsSinceLastPromotionLvl
+  from Attrition_Subset_Predict")
+Attrition_Subset_for_Predict
+
+
+##Run nomalization on first 2 coulumns of dataset because they are the predictors
+Attrition_Subset_for_test_norm <- as.data.frame(lapply(Attrition_Subset_for_Predict[,c(1,2)], nor))
+
+```
+Attrition Prediction Results
+
+```{r, echo=FALSE}
+
+
+# k = 15
+classifications = knn(train[,c(1,2)],Attrition_Subset_for_test_norm[,c(1,2)],train_var, k = 15)
+results = as.data.frame(cbind(Attrition_Subset_Predict$ID,classifications))
+
+Predict_layout <- sqldf("select V1 as ID, 
+  case when classifications = 1 then 'No' else 'Yes' end as Attrition
+  
+  from results")
+Predict_layout
+str(results)
+
+######
+write.csv(Predict_layout, file = "AttritionPredictions.csv")
+
+```
+
+
+Model for Salary
+
+
+```{r, echo=FALSE}
+
+
+Income_Subset <- sqldf(" Select id, 
+                                age,
+                                DeptTurnoverLvl,
+                                JobLevelGrp,
+                                JobRoleLvl,
+                                WorkYrsGroupLvl,
+                                LogMonthlyIncome,
+                                TotalWorkingYears
+                      from Attrition_Subset
+                      ")
+str(Income_Subset)
+summary(Income_Subset)
+
+
+
+# Weight, Acceleration, and Displacement look promising, let's zoom in
+Income_Subset %>% ggplot(aes(x=JobLevelGrp, y=LogMonthlyIncome, color=JobRoleLvl)) + geom_jitter() # Increasing SD?
+Income_Subset %>% ggplot(aes(x=JobRoleLvl, y=LogMonthlyIncome, color=DeptTurnoverLvl)) + geom_jitter() # Increasing SD?
+
+AttritionData %>% select(Age,YearsAtCompany,YearsInCurrentRole,YearsSinceLastPromotion,TrainingTimesLastYear,PercentSalaryHike)
+
+ggpairs(Attrition_Subset_for_Predict[,-1])
+
+AttritionData$LogMonthlyIncome = log(AttritionData$MonthlyIncome)
+# Let's look at distribution of weight and mpg values
+hist(AttritionData$MonthlyIncome, main="Monthly Income Distribution", xlab="Monthly Income")
+hist((AttritionData$LogMonthlyIncome), main="Log Monthly Income Distribution", xlab="Log Monthly Income")
+
+hist(Income_Subset$WorkYrsGroupLvl, main="Monthly Income Distribution", xlab="Monthly Income")
+# Scatter plot to inspect general trend
+AttritionData %>% ggplot(aes(x=AttritionData$LogMonthlyIncome, y=AttritionData$TotalWorkingYears, color = Department)) + 
+  geom_point() + geom_smooth(method = "lm")+ggtitle("Working Year vs Income")+ylab("Working Years")+xlab("Log Monthly Income")
+
+AttritionData %>% ggplot(aes(x=AttritionData$LogMonthlyIncome, y=AttritionData$DeptTurnoverLv, color = Department)) + 
+  geom_point() + geom_smooth(method = "lm")+ggtitle("Working Year vs Income")+ylab("Working Years")+xlab("Log Monthly Income")
+
+```
+
+Split into Test and Train and check output
+
+```{r, echo=FALSE}
+
+set.seed(101) # Set Seed so that same sample can be reproduced in future
+#Select 75% of data as sample from total 'n' rows of the data  
+sample <- sample.int(n = nrow(Smote), size = floor(.75*nrow(Smote)), replace = F)
+Income_train <- Income_Subset[sample, ]
+Income_test  <- Income_Subset[-sample, ]
+
+
+# Use lm to create a linear regression model
+fit2 <- lm(LogMonthlyIncome~
+             DeptTurnoverLvl+
+           JobLevelGrp+
+           JobRoleLvl+
+           #WorkYrsGroupLvl+
+           TotalWorkingYears,
+             data=Income_train)
+summary(fit2)
+
+
+
+
+formula(fit2)
+
+Model1_Preds = predict(fit2, newdata = Income_test, interval = "prediction")
+output <- as.data.frame(Model1_Preds)
+output$fit = 10^output$fit
+output$lwr = 10^output$lwr
+output$upr = 10^output$upr
+
+summary(output)
+
+
+
+#check the fit
+Test <- cbind(output,MonthlyIncome = 10^Income_test$LogMonthlyIncome)
+
+```
+
+Output for Income File
+```{r, echo=FALSE}
+
+
+###Import 
+IncomeData_Predict <- read.csv('CaseStudy2CompSet No Salary.csv')
+
+Income_Subset_Predict <- sqldf(" Select id,
+                                
+                          case when Department = 'Research & Development' then 1
+                              when Department = 'Human Resources' then 2 
+                              else 3 end 
+                                as 'DeptTurnoverLvl',
+                          
+                          case when JobLevel = 4 then 1
+                              when JobLevel in (2,3,5) then 2
+                              else 3 end 
+                                as 'JobLevelGrp',      
+                          
+                          case when JobRole like '%Director%' then 1
+                              when JobRole in ('Healthcare Representative','Manager') then 2
+                              when JobRole = 'Sales Representative' then 4
+                              else 3 end 
+                                as 'JobRoleLvl',
+                          
+                         TotalWorkingYears    
+                                
+                          from IncomeData_Predict
+                        ")
+Income_Subset_Predict
+str(Income_Subset_Predict)
+
+
+Model1_Preds = predict(fit2, newdata = Income_Subset_Predict, interval = "prediction")
+output <- as.data.frame(Model1_Preds)
+output$fit = 10^output$fit
+output$lwr = 10^output$lwr
+output$upr = 10^output$upr
+
+export <- cbind(ID = Income_Subset_Predict$ID, Income = output$fit)
+summary(export)
+write.csv(export, file = "Case2PredictionsReo Salary.csv")
+
+
+
+# The easy way to get the p-values and confidence intervals
+summary(fit2)
+confint(fit2)
+formula(fit2)
+```
